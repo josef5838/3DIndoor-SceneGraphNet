@@ -2,6 +2,7 @@ from utils.default_settings import *
 from utils.utl import try_mkdir
 import argparse
 from SceneGraphNet.train import train_model
+from SceneGraphNet.inference import inference_model
 
 ''' parser input '''
 parser = argparse.ArgumentParser()
@@ -27,22 +28,28 @@ parser.add_argument('--num_test_rooms', default=100, type=int, help='number of r
 
 # for load and test on pretrained model
 parser.add_argument('--test', default=False, action='store_true')
-parser.add_argument('--load_model_name', type=str, default='', help='dir of pretrained model')
+parser.add_argument('--load_model_name', type=str, default='my-train-model', help='dir of pretrained model')
 parser.add_argument('--load_model_along_with_optimizer', default=False, action='store_true', help='if load pretrained model along with optimizer')
 
 # others
 parser.add_argument('--verbose', default=0, type=int, help='')
 parser.add_argument('--name', default='my-train-model')
 
+parser.add_argument('--mode', default='train', help='train or test')
+
+parser.add_argument('--continue_training', default=False, action='store_true')
+
 
 opt_parser = parser.parse_args()
 opt_parser.write = not opt_parser.test
 
-id2cat_file = open('data/preprocess/TRAIN_id2cat_{}.json'.format(opt_parser.room_type))
-opt_parser.id2cat = json.load(id2cat_file)
+
+id2cat_file_path = os.path.join(root_dir, 'data/preprocess/TRAIN_id2cat_{}.json'.format(opt_parser.room_type))
+with open(id2cat_file_path) as id2cat_file:
+    opt_parser.id2cat = json.load(id2cat_file)
 opt_parser.cat2id = {opt_parser.id2cat[id]: id for id in opt_parser.id2cat.keys()}
 rels = ["None"]
-with open("data/relationships.txt") as rfile:
+with open(os.path.join(root_dir, "data/relationships.txt")) as rfile:
     for line in rfile:
             # Remove leading/trailing whitespace
             line = line.strip()
@@ -55,21 +62,32 @@ opt_parser.rels = rels
 rel2id = {}
 for idx, rel in enumerate(rels):
     rel2id[rel]=idx
+id2rel = {v: k for k, v in rel2id.items()}
+opt_parser.id2rel = id2rel
 # import pdb; pdb.set_trace()
 opt_parser.rel2id = rel2id
 if(opt_parser.load_model_name != ''):
-    opt_parser.ckpt = os.path.join(ckpt_dir, opt_parser.load_model_name, 'Entire_model_max_acc.pth')
+    # get the latest checkpoint name
+    # ckpt_names = os.listdir(os.path.join(ckpt_dir, opt_parser.load_model_name))
+    # ckpt_names = [ckpt_name for ckpt_name in ckpt_names if 'epoch' in ckpt_name]
+    # ckpt_names = sorted(ckpt_names, key=lambda x: int(x.split('_')[-1].split('.')[0]))  
+    # opt_parser.ckpt = os.path.join(ckpt_dir, opt_parser.load_model_name, ckpt_names[-1])
+    opt_parser.ckpt = os.path.join(ckpt_dir, opt_parser.load_model_name, "min_loss.pth")
 else:
     opt_parser.ckpt = ''
 
 opt_parser.outf = os.path.join(ckpt_dir, opt_parser.name)
 try_mkdir(opt_parser.outf)
 
-M = train_model(opt_parser=opt_parser)
+if(opt_parser.mode == "train"):
+    M = train_model(opt_parser=opt_parser)
 
-if(not opt_parser.test):
-    for epoch in range(opt_parser.nepoch):
-        M.train(epoch)
-        M.test(epoch)
+    if(not opt_parser.test):
+        for epoch in range(opt_parser.nepoch):
+            M.train(epoch)
+            M.test(epoch)
+    else:
+        M.test(0)
 else:
-    M.test(0)
+    M = inference_model(opt_parser)
+    M.inference(0)

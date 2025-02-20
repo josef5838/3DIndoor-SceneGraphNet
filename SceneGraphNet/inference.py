@@ -50,7 +50,7 @@ class inference_model():
         ''' Load pre-trained model '''
         self.pretrained_epoch = 0
         if opt_parser.ckpt != '':
-            ckpt = torch.load(opt_parser.ckpt)
+            ckpt = torch.load(opt_parser.ckpt, map_location=device)
 
             def update_partial_dict(model, pretrained_ckpt):
                 model_dict = model.state_dict()
@@ -71,8 +71,10 @@ class inference_model():
         self.LOSS_CLS = torch.nn.CrossEntropyLoss()
 
         ''' load valid rooms '''
-        with open(os.path.join(pkl_dir, '{}_val.json'.format(opt_parser.room_type))) as f:
+        with open(os.path.join(pkl_dir, '{}_data.json'.format(opt_parser.room_type))) as f:
             self.valid_rooms = json.load(f)
+        
+        self.valid_rooms_test = self.valid_rooms[11:12] # first a room for testing
 
         self.STATE = 'EVAL'
         self.MIN_LOSS = float('inf')
@@ -153,10 +155,6 @@ class inference_model():
                     for i, name in enumerate(node_names):
                         # Assuming enc_fold_results is a list or can be indexed accordingly.
                         enc_mapping[name] = enc_fold_nodes[i]
-                    # enc_fold_nodes = enc_fold.apply(self.full_enc, list(encoded_nodes.values()))
-
-                    
-                    # enc_fold_nodes = torch.split(enc_fold_nodes[0], 1, 0)
 
                     dec_fold = torchfold.Fold()
                     dec_fold_nodes = []
@@ -167,15 +165,20 @@ class inference_model():
 
                     # For every remaining node in the reduced graph, add a decoder op.
                     query_gt_labels = []
-                    for known_node in node_names:
-                        node_handle = dec_fold.add('full_dec', query_d_vec, enc_mapping[known_node])
-                        dec_fold_nodes.append(node_handle)
+                    quadruplets = []
+                    for idx, known_node in enumerate(node_names):
                         # Look up the ground-truth relationship from the original room.
                         gt_rel = next((rel for rel, values in original_node_list[query_node].items() 
                                     if isinstance(values, list) and known_node in values), "None")
+                        if gt_rel == "None":
+                            continue
+                        node_handle = dec_fold.add('full_dec', query_d_vec, enc_mapping[known_node])
+                        dec_fold_nodes.append(node_handle)
+                        
                         
                         gt = opt_parser.rel2id[gt_rel]
                         query_gt_labels.append(gt)
+                        quadruplets.append([query_node, known_node, gt_rel, idx])
 
                     # If no (query, known) pairs were found, skip this query.
                     if len(query_gt_labels) == 0:
@@ -189,6 +192,28 @@ class inference_model():
 
                     logits = torch.cat(fold_out, dim=0)
 
+                    pred_rels = torch.argmax(logits, dim=1)
+
+                    outputs = []
+                    for idx, pred in enumerate(pred_rels):
+                        # 0: query node, 1: known node, 2: ground-truth relationship, 3: predicted relationship
+                        outputs.append([quadruplets[idx][0], quadruplets[idx][1], quadruplets[idx][2], opt_parser.id2rel[pred.item()]])
+
+                    # add the rest of triplets
+                    # for node in reduced_node_list:
+                    #     for rel in self.rels:
+                    #         if rel == "None":
+                    #             continue
+                    #         # import pdb; pdb.set_trace()
+                    #         if isinstance(reduced_node_list[node][rel], list):
+                    #             for obj in reduced_node_list[node][rel]:
+                    #                 outputs.append([node, obj, rel, "No_Pred"])
+                    
+                    # save to txt
+                    with open(os.path.join(opt_parser.outf, 'outputs_{}.txt'.format(epoch)), 'a') as f:
+                        for output in outputs:
+                            f.write(f"{output[0]} {output[1]} {output[2]} {output[3]}\n")
+
 
                     # Create ground-truth tensor.
                     gt_tensor = to_torch(query_gt_labels, torch_type=torch.LongTensor, dim_0=len(query_gt_labels)).view(-1)
@@ -201,13 +226,6 @@ class inference_model():
                     total_loss += loss.item() * len(query_gt_labels)
                     total_examples += len(query_gt_labels)
 
-                    if is_training:
-                        for key in self.opt:
-                            self.opt[key].zero_grad()
-                        loss.backward()
-                        for key in self.opt:
-                            self.opt[key].step()
-
                     msg = (f"{self.STATE} {opt_parser.name} Epoch {epoch}: "
                         f"Room {opt_parser.batch_size * batch_i + room_i}, Query {query_node} "
                         f"({len(query_gt_labels)} pairs) Loss: {loss.item():.4f}")
@@ -219,3 +237,9 @@ class inference_model():
         tqdm.write("=" * 55)
         tqdm.write(f"{self.STATE} {epoch}: Avg Relationship Loss: {avg_loss:.4f}")
         tqdm.write("=" * 55)
+
+
+    def inference(self, epoch):
+        st = time.time()
+        self._inference_pass(self.valid_rooms_test, epoch)
+        print('time usage:', time.time() - st)

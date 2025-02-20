@@ -1,2 +1,6 @@
 SceneGraphNet/__pycache__/
 utils/__pycache__/
+
+*.err
+*.out
+*.pth

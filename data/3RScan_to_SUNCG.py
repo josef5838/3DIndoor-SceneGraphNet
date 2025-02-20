@@ -84,7 +84,8 @@ def convert_dataset(input_data, rel_types):
 
 def main():
     # Read the original JSON dataset from "input.json"
-    with open("/cluster/project/cvg/students/shangwu/graphto3d_mani/GT/relationships_train_filtered.json", "r") as infile:
+
+    with open("/cluster/project/cvg/students/shangwu/graphto3d_mani/GT/relationships_validation_filtered.json", "r") as infile:
         input_data = json.load(infile)
     
     rels = []
@@ -103,7 +104,7 @@ def main():
     converted_data = convert_dataset(input_data, rels)
 
     # Write the converted data to "output.json"
-    with open("/cluster/project/cvg/students/shangwu/3DIndoor-SceneGraphNet/data/3RScan_data.json", "w") as outfile:
+    with open("/cluster/project/cvg/students/shangwu/3DIndoor-SceneGraphNet/data/3RScan_val.json", "w") as outfile:
         json.dump(converted_data, outfile, indent=2)
 
 if __name__ == "__main__":

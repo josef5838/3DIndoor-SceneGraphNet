@@ -11,6 +11,11 @@ from random import shuffle
 import torchfold
 import time
 from tqdm import tqdm
+import random
+import sys
+
+# Disable progress bar if not running in a terminal (non-interactive)
+disable_progress = not sys.stdout.isatty()
 
 
 class train_model():
@@ -49,7 +54,7 @@ class train_model():
 
         ''' Load pre-trained model '''
         self.pretrained_epoch = 0
-        if opt_parser.ckpt != '':
+        if opt_parser.ckpt != '' and opt_parser.continue_training == True:
             ckpt = torch.load(opt_parser.ckpt)
 
             def update_partial_dict(model, pretrained_ckpt):
@@ -113,7 +118,7 @@ class train_model():
                             range(0, len(valid_rooms), opt_parser.batch_size)]
         
         ''' Batch loop '''
-        for batch_i, batch in enumerate(tqdm(room_idx_batches, desc="Batches")):
+        for batch_i, batch in enumerate(tqdm(room_idx_batches, desc="Batches", disable=disable_progress)):
 
             batch_rooms = [valid_rooms[i] for i in batch]
 
@@ -122,11 +127,37 @@ class train_model():
             ================================================================== """
 
             # loop for rooms
-            for room_i, room in enumerate(tqdm(batch_rooms, desc="Rooms", leave=False)):
+            for room_i, room in enumerate(tqdm(batch_rooms, desc="Rooms", leave=False, disable=disable_progress)):
                 room_loss = 0.0
                 room_pairs = 0
                 
                 original_node_list = room['node_list']
+                
+                # augment the dataset such that for relationships that have opposite relationships, set the opposite relationship for the flipped pair
+                opp_rels = {
+                    "higher_than": "lower_than",
+                    "lower_than": "higher_than",
+                    "left": "right",
+                    "right": "left",
+                    "front": "behind",
+                    "behind": "front",
+                    "bigger_than": "smaller_than",
+                    "smaller_than": "bigger_than",
+                    "same_as": "same_as"
+                }
+                for rel in opp_rels:
+                    if rel in self.rels and opp_rels[rel] in self.rels:
+                        for node_name, node_info in original_node_list.items():
+                            if isinstance(node_info, dict):
+                                if rel in node_info:
+                                    for i, val in enumerate(node_info[rel]):
+                                        if val in original_node_list:
+                                            if opp_rels[rel] not in node_info:
+                                                node_info[opp_rels[rel]] = []
+                                            if node_name not in original_node_list[val][opp_rels[rel]]:
+                                                original_node_list[val][opp_rels[rel]].append(node_name)
+                # import pdb; pdb.set_trace()
+                                                    
 
                 # Process each node as a query node.
                 for query_node in list(original_node_list.keys()):
@@ -146,8 +177,6 @@ class train_model():
                                 # If it's a single value instead, clear it if it matches.
                                 elif node_info[rel] == query_node:
                                     node_info[rel] = None
-
-                    # Initialize a new torchfold fold for this query.
                      
                     enc_fold = torchfold.Fold()
                     # Build the fold operations and get the list of node handles
@@ -157,15 +186,12 @@ class train_model():
                     node_handles = [[node] for node in encoded_nodes.values()]
                     enc_fold_nodes = enc_fold.apply(self.full_enc, node_handles)
 
+                    # Create a mapping to decouple the node names from the encoded nodes.
                     node_names = list(encoded_nodes.keys())
                     enc_mapping = {}
                     for i, name in enumerate(node_names):
                         # Assuming enc_fold_results is a list or can be indexed accordingly.
                         enc_mapping[name] = enc_fold_nodes[i]
-                    # enc_fold_nodes = enc_fold.apply(self.full_enc, list(encoded_nodes.values()))
-
-                    
-                    # enc_fold_nodes = torch.split(enc_fold_nodes[0], 1, 0)
 
                     dec_fold = torchfold.Fold()
                     dec_fold_nodes = []
@@ -174,17 +200,25 @@ class train_model():
                     query_k_vec = to_torch(query_k_vec)  # Convert to tensor.
                     query_d_vec = self.full_enc.box_enc_func(query_k_vec)
 
+                    
                     # For every remaining node in the reduced graph, add a decoder op.
                     query_gt_labels = []
                     for known_node in node_names:
-                        node_handle = dec_fold.add('full_dec', query_d_vec, enc_mapping[known_node])
-                        dec_fold_nodes.append(node_handle)
                         # Look up the ground-truth relationship from the original room.
                         gt_rel = next((rel for rel, values in original_node_list[query_node].items() 
                                     if isinstance(values, list) and known_node in values), "None")
+                        if gt_rel == "None" and random.random() < 0.9:
+                            continue
+                        node_handle = dec_fold.add('full_dec', query_d_vec, enc_mapping[known_node])
+                        dec_fold_nodes.append(node_handle)
+                        
                         
                         gt = opt_parser.rel2id[gt_rel]
                         query_gt_labels.append(gt)
+                    # compute loss weights as the inverse of the number of examples for each class
+                    # loss_weights = torch.tensor([1.0 / len([x for x in query_gt_labels if x == i]) for i in range(len(opt_parser.rel2id))])
+                    # loss_weights = loss_weights / loss_weights.sum()
+                    # loss_weights = loss_weights.to(device)
 
                     # If no (query, known) pairs were found, skip this query.
                     if len(query_gt_labels) == 0:
@@ -229,20 +263,21 @@ class train_model():
         tqdm.write(f"{self.STATE} {epoch}: Avg Relationship Loss: {avg_loss:.4f}")
         tqdm.write("=" * 55)
         # Optionally save the model when evaluating.
-        if not is_training:
-            def save_model(save_type):
-                torch.save({
-                    'full_enc_state_dict': self.full_enc.state_dict(),
-                    'full_dec_state_dict': self.full_dec.state_dict(),
-                    'full_enc_opt': self.opt['full_enc'].state_dict(),
-                    'full_dec_opt': self.opt['full_dec'].state_dict(),
-                    'epoch': epoch
-                }, f"{opt_parser.outf}/Entire_model_{save_type}.pth")
+        # if not is_training:
+        def save_model(save_type):
+            torch.save({
+                'full_enc_state_dict': self.full_enc.state_dict(),
+                'full_dec_state_dict': self.full_dec.state_dict(),
+                'full_enc_opt': self.opt['full_enc'].state_dict(),
+                'full_dec_opt': self.opt['full_dec'].state_dict(),
+                'epoch': epoch
+            }, f"{opt_parser.outf}/{save_type}.pth")
+            tqdm.write(f"Saved model to {opt_parser.outf}/{save_type}.pth")
 
-            if avg_loss < self.MIN_LOSS:
-                self.MIN_LOSS = avg_loss
-                save_model('min_loss')
-            save_model('last_epoch')
+        if avg_loss < self.MIN_LOSS:
+            self.MIN_LOSS = avg_loss
+            save_model('min_loss')
+        save_model(f'epoch_{epoch}')
 
         return
 
