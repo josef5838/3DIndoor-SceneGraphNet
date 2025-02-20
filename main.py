@@ -36,6 +36,7 @@ parser.add_argument('--verbose', default=0, type=int, help='')
 parser.add_argument('--name', default='manipulation')
 
 parser.add_argument('--mode', default='train', help='train or test')
+parser.add_argument('--task', default='add', help='add or mani')
 
 parser.add_argument('--continue_training', default=False, action='store_true')
 
