@@ -1,11 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.init as init
-from torch._six import string_classes, int_classes
+# from torch._six import string_classes, int_classes
 import re, os
 import collections
 import numpy as np
 
+string_classes = (str,)
+int_classes = (int,)
 
 def weight_init(m):
     '''

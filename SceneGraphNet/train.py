@@ -7,10 +7,10 @@ from utils.utl import weight_init
 import copy
 import SceneGraphNet.model as model
 from SceneGraphNet.model import to_torch, device
-from tensorboardX import SummaryWriter
 from random import shuffle
 import torchfold
 import time
+from tqdm import tqdm
 
 
 class train_model():
@@ -25,18 +25,22 @@ class train_model():
         self.model = model
 
         ''' Initialize model '''
-        k_size = k_size_dic[opt_parser.room_type]
-
+        # Haoliang
+        k_size = len(opt_parser.cat2id.keys()) + 1
+        
+        self.rels = opt_parser.rels
+        
         # encoder
-        self.full_enc = self.model.FullEnc(k=k_size, d=opt_parser.d_vec_dim, h=opt_parser.h_vec_dim,
-                                           aggregate_func=opt_parser.aggregation_func)
+        self.full_enc = self.model.FullEnc(rels=self.rels, k=k_size, d=opt_parser.d_vec_dim, h=opt_parser.h_vec_dim)
         self.full_enc.apply(weight_init)
         self.full_enc.to(device)
 
-        # decoder
-        self.full_dec = self.model.FullDec(k=k_size, d=opt_parser.d_vec_dim, h=opt_parser.h_vec_dim)
+        #Haoliang
+
+        self.full_dec = self.model.RelationshipDec(d=opt_parser.d_vec_dim, h=opt_parser.h_vec_dim, num_rels=len(opt_parser.rel2id))
         self.full_dec.apply(weight_init)
         self.full_dec.to(device)
+        
 
         ''' Setup Optimizer '''
         self.opt = {}
@@ -64,155 +68,18 @@ class train_model():
 
         ''' Loss function '''
         self.LOSS_CLS = torch.nn.CrossEntropyLoss()
-        self.LOSS_L2 = torch.nn.MSELoss()
-
-        ''' Output Summary in tensorboard '''
-        if (opt_parser.write):
-            self.writer = SummaryWriter(log_dir=os.path.join(log_dir, opt_parser.name))
 
         ''' load valid rooms '''
-        f = open(os.path.join(pkl_dir, '{}_data.json'.format(opt_parser.room_type)))
-        self.valid_rooms = json.load(f)
+        with open(os.path.join(pkl_dir, '{}_data.json'.format(opt_parser.room_type))) as f:
+            self.valid_rooms = json.load(f)
         self.valid_rooms_train = self.valid_rooms[0:opt_parser.num_train_rooms]
         self.valid_rooms_test = self.valid_rooms[opt_parser.num_train_rooms:opt_parser.num_train_rooms + opt_parser.num_test_rooms]
 
-        self.MAX_ACC = -1.0
-        self.MAX_ACC = -1.0
-        self.MIN_LOSS = 1e10
-        self.MIN_DIM_LOSS = 1e10
         self.STATE = 'INIT'
+        self.MIN_LOSS = float('inf')
 
-    ''' useful functions '''
-    def find_root_to_leaf_node_path(self, node_list, cur_node):
-        """
-        find a list of paths from tree root to tree leaf nodes (in a recursive way)
-        :param node_list: tree node list
-        :param cur_node: current root node
-        :return:
-        """
-        root_to_leaf_path = []
 
-        # middle node
-        if (len(node_list[cur_node]['co-occurrence']) + len(node_list[cur_node]['surround']) +
-                len(node_list[cur_node]['support']) > 0):
-            for child in node_list[cur_node]['co-occurrence']:
-                child_node_list = self.find_root_to_leaf_node_path(node_list, child)
-                p = [[cur_node] + c for c in child_node_list]
-                root_to_leaf_path += p
-            for child in node_list[cur_node]['support']:
-                child_node_list = self.find_root_to_leaf_node_path(node_list, child)
-                p = [[cur_node] + c for c in child_node_list]
-                root_to_leaf_path += p
-            for child in node_list[cur_node]['surround']:
-                for key in child.keys():
-                    child_node_list = self.find_root_to_leaf_node_path(node_list, key)
-                    child_node_list += self.find_root_to_leaf_node_path(node_list, child[key])
-                    p = [[cur_node] + c for c in child_node_list]
-                    root_to_leaf_path += p
-            return root_to_leaf_path
-        # leaf node
-        else:
-            return [[cur_node]]
-
-    def find_selected_node_list(self, node_list, cur_node):
-        """
-        find all nodes (or keys) under the subtree with root node=cur_node
-        :param node_list: entire tree node list
-        :param cur_node: current root node
-        :return:
-        """
-        sub_keys = []
-
-        # middle node
-        if (len(node_list[cur_node]['co-occurrence']) + len(node_list[cur_node]['surround']) +
-                len(node_list[cur_node]['support']) > 0):
-            for child in node_list[cur_node]['co-occurrence']:
-                child_sub_keys = self.find_selected_node_list(node_list, child)
-                sub_keys += child_sub_keys
-
-            for child in node_list[cur_node]['support']:
-                child_sub_keys = self.find_selected_node_list(node_list, child)
-                sub_keys += child_sub_keys
-
-            for child in node_list[cur_node]['surround']:
-                for key in child.keys():
-                    child_sub_keys = self.find_selected_node_list(node_list, key)
-                    child_sub_keys += self.find_selected_node_list(node_list, child[key])
-                    sub_keys += child_sub_keys
-            sub_keys += [cur_node]
-            return sub_keys
-        # leaf node
-        else:
-            return [cur_node]
-
-    def find_parent_sibling_child_list(self, node_list):
-        """
-        find parent / sibling / child nodes for each node in node_list
-        :param node_list:
-        :return:
-        """
-
-        # init
-        for node in node_list.keys():
-            for relation in ['parents', 'siblings', 'childs']:
-                node_list[node][relation] = []
-
-        # parents and childs
-        for node in node_list.keys():
-            for c in node_list[node]['co-occurrence']:
-                node_list[c]['parents'] += [(node, 'cooc')]
-                node_list[node]['childs'] += [(c, 'cooc')]
-            for c in node_list[node]['support'].copy():
-                if (c in node_list.keys()):
-                    node_list[c]['parents'] += [(node, 'supp')]
-                    node_list[node]['childs'] += [(c, 'supp')]
-            for c in node_list[node]['surround'].copy():
-                for key in c.keys():
-                    node_list[key]['parents'] += [(node, 'surr')]
-                    node_list[node]['childs'] += [(key, 'surr')]
-                    node_list[c[key]]['parents'] += [(node, 'surr')]
-                    node_list[node]['childs'] += [(c[key], 'surr')]
-
-        # siblings (next-to relation)
-        for node in node_list.keys():
-            for parent_node, _ in node_list[node]['parents']:
-                node_list[node]['siblings'] += node_list[parent_node]['childs']
-
-        return node_list
-
-    def __preprocess_root_wall_nodes__(self, node_list):
-        """
-        # simple preprocess for root and wall nodes
-        :param node_list:
-        :return:
-        """
-
-        node_list['root']['self_info'] = {'dim': [0.0, 0.0, 0.0], 'translation': [0.0, 0.0, 0.0],
-                                          'rotation': [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]}
-        x_min = node_list['wall_0']['self_info']['translation'][0]
-        x_max = node_list['wall_2']['self_info']['translation'][0]
-        y_min = node_list['wall_3']['self_info']['translation'][2]
-        y_max = node_list['wall_1']['self_info']['translation'][2]
-        x_mean = 0.5 * (x_min + x_max)
-        y_mean = 0.5 * (y_min + y_max)
-        for wall_node in ['wall_0', 'wall_1', 'wall_2', 'wall_3']:
-            node_list[wall_node]['self_info']['translation'][0] -= x_mean
-            node_list[wall_node]['self_info']['translation'][2] -= y_mean
-
-        # for root and wall nodes, switch cooc to support relation
-        # (we simply assume all wall nodes are 'supported' by root node, all other nodes are 'supported' by wall nodes)
-        if ('support' not in node_list['root'].keys()):
-            node_list['root']['surround'] = []
-            node_list['root']['support'] = copy.deepcopy(node_list['root']['co-occurrence'])
-            node_list['root']['co-occurrence'] = []
-        for cur_node in ['wall_0', 'wall_1', 'wall_2', 'wall_3']:
-            if (len(node_list[cur_node]['co-occurrence']) > 0):
-                node_list[cur_node]['surround'] = []
-                node_list[cur_node]['support'] = copy.deepcopy(node_list[cur_node]['co-occurrence'])
-                node_list[cur_node]['co-occurrence'] = []
-
-        return node_list
-
+   
     def _training_pass(self, valid_rooms, epoch, is_training=True):
         """
         Single training pass
@@ -235,220 +102,134 @@ class train_model():
             self.STATE = 'EVAL'
             self.full_enc.eval()
             self.full_dec.eval()
+    
 
         ''' init loss / accuracy '''
-        loss_cat_per_epoch, acc_cat_per_epoch, loss_dim_per_epoch, num_node_per_epoch, dim_acc_per_epoch = 0.0, {1:0.0, 3:0.0, 5:0.0}, 0.0, 0.0, 0.0
-
+        total_loss, total_examples = 0.0, 0
         ''' shuffle room list and create training batches '''
         shuffle(valid_rooms)
         room_indices = list(range(len(valid_rooms)))
         room_idx_batches = [room_indices[i: i + opt_parser.batch_size] for i in
                             range(0, len(valid_rooms), opt_parser.batch_size)]
-
+        
         ''' Batch loop '''
-        for batch_i, batch in enumerate(room_idx_batches):
+        for batch_i, batch in enumerate(tqdm(room_idx_batches, desc="Batches")):
 
             batch_rooms = [valid_rooms[i] for i in batch]
 
             """ ==================================================================
                                         Encoder Part
             ================================================================== """
-            # init torchfold
-            enc_fold = torchfold.Fold()
-            enc_fold_nodes = []
-            enc_rand_path_order = []
-            enc_rand_path_root_to_leaf_order = []
 
             # loop for rooms
-            for room_i, room in enumerate(batch_rooms):
+            for room_i, room in enumerate(tqdm(batch_rooms, desc="Rooms", leave=False)):
+                room_loss = 0.0
+                room_pairs = 0
+                
+                original_node_list = room['node_list']
 
-                node_list = self.__preprocess_root_wall_nodes__(room['node_list'])
+                # Process each node as a query node.
+                for query_node in list(original_node_list.keys()):
+                    # Deep copy the node list for a reduced graph.
+                    reduced_node_list = copy.deepcopy(original_node_list)
+                    # Remove the query node.
+                    reduced_node_list.pop(query_node, None)
 
-                # adapt acceleration for large graphs (by splitting into sub-graphs)
-                consider_path_type = ['root']
-                root_to_split = False
+                    # Additionally, remove any references to the query node from all relationship lists.
+                    # Here, we assume that the relationship keys are provided in self.rels.
+                    for node_name, node_info in reduced_node_list.items():
+                        for rel in self.rels:
+                            if rel in node_info:
+                                # Assume the relationship value is a list of node names.
+                                if isinstance(node_info[rel], list):
+                                    node_info[rel] = [n for n in node_info[rel] if n != query_node]
+                                # If it's a single value instead, clear it if it matches.
+                                elif node_info[rel] == query_node:
+                                    node_info[rel] = None
 
-                if(opt_parser.adapt_training_on_large_graph):
-                    if (len(node_list.keys()) >= int(opt_parser.max_scene_nodes)):
-                        consider_path_type = node_list['root']['support']
-                        root_to_split = True
+                    # Initialize a new torchfold fold for this query.
+                     
+                    enc_fold = torchfold.Fold()
+                    # Build the fold operations and get the list of node handles
+                    encoded_nodes = self.model.encode_graph_fold(enc_fold, reduced_node_list, opt_parser)
+                    # Use the returned list of handles when applying the fold
+                    # Wrap each node handle in a list so that each is iterable.
+                    node_handles = [[node] for node in encoded_nodes.values()]
+                    enc_fold_nodes = enc_fold.apply(self.full_enc, node_handles)
 
-                # loop for sub-graphs
-                for sub_tree_root_node in consider_path_type:
+                    node_names = list(encoded_nodes.keys())
+                    enc_mapping = {}
+                    for i, name in enumerate(node_names):
+                        # Assuming enc_fold_results is a list or can be indexed accordingly.
+                        enc_mapping[name] = enc_fold_nodes[i]
+                    # enc_fold_nodes = enc_fold.apply(self.full_enc, list(encoded_nodes.values()))
 
-                    # find sub-graph's root to leaf node path
-                    subtree_to_leaf_path = self.find_root_to_leaf_node_path(node_list, cur_node=sub_tree_root_node)
+                    
+                    # enc_fold_nodes = torch.split(enc_fold_nodes[0], 1, 0)
 
-                    # skip unreasonable paths
-                    subtree_to_leaf_path = [p for p in subtree_to_leaf_path if len(p) >= 2 and len(p) < opt_parser.max_scene_nodes]
-                    subtree_to_leaf_path = [p for p in subtree_to_leaf_path if 'wall' not in p[-1].split('_')[0]]
-                    if(len(subtree_to_leaf_path) == 0):
+                    dec_fold = torchfold.Fold()
+                    dec_fold_nodes = []
+                    # For the query node, compute its representation solely from its category label.
+                    query_k_vec = self.model.get_gt_k_vec(original_node_list, query_node, opt_parser)
+                    query_k_vec = to_torch(query_k_vec)  # Convert to tensor.
+                    query_d_vec = self.full_enc.box_enc_func(query_k_vec)
+
+                    # For every remaining node in the reduced graph, add a decoder op.
+                    query_gt_labels = []
+                    for known_node in node_names:
+                        node_handle = dec_fold.add('full_dec', query_d_vec, enc_mapping[known_node])
+                        dec_fold_nodes.append(node_handle)
+                        # Look up the ground-truth relationship from the original room.
+                        gt_rel = next((rel for rel, values in original_node_list[query_node].items() 
+                                    if isinstance(values, list) and known_node in values), "None")
+                        
+                        gt = opt_parser.rel2id[gt_rel]
+                        query_gt_labels.append(gt)
+
+                    # If no (query, known) pairs were found, skip this query.
+                    if len(query_gt_labels) == 0:
                         continue
 
-                    # find node list for sub-graphs
-                    sub_keys = list(set(self.find_selected_node_list(node_list, sub_tree_root_node)))
-                    if(root_to_split):
-                        sub_keys += ['root']
-                    sub_node_list = dict((k, node_list[k]) for k in sub_keys if k in node_list.keys())
+                    # Execute the fold to obtain relationship logits.
+                    dec_fold_nodes_wrapped = [[node] for node in dec_fold_nodes]
 
-                    # update parents, childs, siblings for each node
-                    sub_node_list = self.find_parent_sibling_child_list(sub_node_list)
+                    # Now, call apply with the wrapped nodes.
+                    fold_out = dec_fold.apply(self.full_dec, dec_fold_nodes_wrapped)
 
-                    # exclude examples with too many sub tree nodes
-                    if(len(sub_node_list.keys()) >= int(opt_parser.max_scene_nodes)):
-                        print('skip too large sub-scene:', len(sub_node_list.keys()), '>', opt_parser.max_scene_nodes)
-                        continue
-
-                    subtree_to_leaf_path.sort()
-                    # loop for each root-to-leaf path
-                    for rand_path_idx, rand_path in enumerate(subtree_to_leaf_path):
-
-                        rand_path_fold, rand_path_node_name_order = self.model.encode_tree_fold(enc_fold, sub_node_list, rand_path, opt_parser)
-                        enc_fold_nodes += rand_path_fold
-                        enc_rand_path_order += [[room_i, sub_tree_root_node] + rand_path_node_name_order]
-                        enc_rand_path_root_to_leaf_order += [rand_path]
-
-            # if batch size is too small, sometimes there is no valid training instance.
-            if(len(enc_fold_nodes) == 0):
-                print('surprisingly this batch has no valid training trees!')
-                continue
+                    logits = torch.cat(fold_out, dim=0)
 
 
-            # torch-fold train encoder
-            enc_fold_nodes = enc_fold.apply(self.full_enc, [enc_fold_nodes])
-            enc_fold_nodes = torch.split(enc_fold_nodes[0], 1, 0)
+                    # Create ground-truth tensor.
+                    gt_tensor = to_torch(query_gt_labels, torch_type=torch.LongTensor, dim_0=len(query_gt_labels)).view(-1)
+                    # import pdb; pdb.set_trace()
+                    loss = self.LOSS_CLS(logits, gt_tensor)
 
-            """ ==================================================================
-                                        Decoder Part
-            ================================================================== """
-            # Ground-truth leaf node vec
-            leaf_node_gt = []
+                    room_loss += loss.item() * len(query_gt_labels)
+                    room_pairs += len(query_gt_labels)
 
-            # # FOLD
-            dec_fold = torchfold.Fold()
-            dec_fold_nodes = []
+                    total_loss += loss.item() * len(query_gt_labels)
+                    total_examples += len(query_gt_labels)
 
-            # loop for all encoded vectors
-            for i, rand_path_order in enumerate(enc_rand_path_order):
+                    if is_training:
+                        for key in self.opt:
+                            self.opt[key].zero_grad()
+                        loss.backward()
+                        for key in self.opt:
+                            self.opt[key].step()
 
-                # find room-node-list
-                room_i = rand_path_order[0]
-                node_list = batch_rooms[room_i]['node_list']
-
-                # decode to k-vec and add Ops to fold
-                dec_fold_nodes.append(self.model.decode_tree_fold(dec_fold, enc_fold_nodes[i], opt_parser))
-                leaf_node_gt += [self.model.get_gt_k_vec(node_list, enc_rand_path_root_to_leaf_order[i][-1], opt_parser)]  # leaf node ground-truth k-vec
-
-            # torch-fold decoder
-            dec_fold_nodes = dec_fold.apply(self.full_dec, [dec_fold_nodes])
-            leaf_node_pred = dec_fold_nodes[0]
-
-            """ ==================================================================
-                                      Loss / Accuray Part
-            ================================================================== """
-            size_pos_dim = 6
-
-            leaf_node_cat_gt = [c[:-size_pos_dim].index(1) for c in leaf_node_gt]
-            leaf_node_cat_gt = to_torch(leaf_node_cat_gt, torch_type=torch.LongTensor, dim_0=len(leaf_node_gt)).view(-1)
-
-            leaf_node_dim_gt = [c[-size_pos_dim:-size_pos_dim+3] for c in leaf_node_gt]
-            leaf_node_dim_gt = to_torch(leaf_node_dim_gt, torch_type=torch.FloatTensor, dim_0=len(leaf_node_gt))
-
-            loss_cat = self.LOSS_CLS(leaf_node_pred[:, :-size_pos_dim], leaf_node_cat_gt)
-            loss_dim = self.LOSS_L2(leaf_node_pred[:, -size_pos_dim:-size_pos_dim+3], leaf_node_dim_gt) * 1000
-
-            # report scores
-            loss_cat_per_batch = loss_cat.data.cpu().numpy()
-            loss_dim_per_batch = loss_dim.data.cpu().numpy()
-            num_node_per_batch = len(leaf_node_gt) * 1.0
-
-            # accuracy (top k)
-            acc_cat_per_batch = {}
-            for k in [1, 3, 5]:
-                _, pred = leaf_node_pred[:, :-size_pos_dim].topk(k, 1, True, True)
-                pred = pred.t()
-                correct = pred.eq(leaf_node_cat_gt.view(1, -1).expand_as(pred))
-                correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
-                acc_cat_per_batch[k] = correct_k[0].cpu().numpy()
-
-            # dimension (diagonal) percentage off
-            diag_pred = np.sqrt(
-                np.sum(leaf_node_pred[:, -size_pos_dim:-size_pos_dim+3].data.cpu().numpy() ** 2, axis=1))
-            diag_gt = np.sqrt(
-                np.sum(leaf_node_dim_gt.data.cpu().numpy() ** 2, axis=1))
-            dim_acc_per_batch = np.sum(np.abs(diag_pred - diag_gt) / diag_gt)
-
-            loss_cat_per_epoch += loss_cat_per_batch
-            loss_dim_per_epoch += loss_dim_per_batch
-            num_node_per_epoch += num_node_per_batch
-            dim_acc_per_epoch += dim_acc_per_batch
-            for key in acc_cat_per_epoch.keys():
-                acc_cat_per_epoch[key] += acc_cat_per_batch[key]
-
-            if (is_training):
-
-                # Back-propagation
-                for key in self.opt.keys():
-                    self.opt[key].zero_grad()
-
-                # only train object dimensions
-                if(opt_parser.train_dim and not opt_parser.train_cat):
-                    loss_dim.backward()
-                # only train object categories
-                elif(opt_parser.train_cat and not opt_parser.train_dim):
-                    loss_cat.backward()
-                # train both
-                elif(opt_parser.train_cat and opt_parser.train_dim):
-                    loss_cat.backward(retain_graph=True)
-                    loss_dim.backward()
-                else:
-                    print('At least enable --train_cat or --train_dim.')
-                    exit(-1)
-
-                for key in self.opt.keys():
-                    self.opt[key].step()
-
-            if (opt_parser.verbose >= 0):
-                print(self.STATE, opt_parser.name, epoch,
-                      ': ({}/{}:{})'.format(batch_i, len(room_idx_batches), num_node_per_batch),
-                      'CAT Loss: {:.4f}, Acc_1: {:.4f}, Acc_3: {:.4f}, Acc_5: {:.4f},Dim Loss: {:.8f}, dim acc: {:.2f}'.format(
-                          loss_cat_per_batch / num_node_per_batch * 100.0,
-                          acc_cat_per_batch[1] / num_node_per_batch,
-                          acc_cat_per_batch[3] / num_node_per_batch,
-                          acc_cat_per_batch[5] / num_node_per_batch,
-                          loss_dim_per_batch / num_node_per_batch,
-                          dim_acc_per_batch / num_node_per_batch))
-
-        """ ==================================================================
-                                  Report Part
-        ================================================================== """
-
-        print('========================================================')
-        print(self.STATE, epoch, ': ',
-              'CAT Loss: {:.4f}, Acc_1: {:.4f}, Acc_3: {:.4f}, Acc_5: {:.4f}, Dim Loss: {:.4f}, Dim acc: {:.4f}'.format(
-                  loss_cat_per_epoch / num_node_per_epoch * 100.0,
-                  acc_cat_per_epoch[1] / num_node_per_epoch,
-                  acc_cat_per_epoch[3] / num_node_per_epoch,
-                  acc_cat_per_epoch[5] / num_node_per_epoch,
-                  loss_dim_per_epoch / num_node_per_epoch,
-                  dim_acc_per_epoch / num_node_per_epoch))
-        print('========================================================')
-
-        ''' write avg to log '''
-        if (opt_parser.write):
-            self.writer.add_scalar('{}_LOSS_CAT'.format(self.STATE), loss_cat_per_epoch / num_node_per_epoch,
-                              epoch)
-            self.writer.add_scalar('{}_ACC_CAT'.format(self.STATE), acc_cat_per_epoch[1] / num_node_per_epoch,
-                              epoch)
-            self.writer.add_scalar('{}_ACC_3_CAT'.format(self.STATE), acc_cat_per_epoch[3] / num_node_per_epoch,
-                              epoch)
-            self.writer.add_scalar('{}_ACC_5_CAT'.format(self.STATE), acc_cat_per_epoch[5] / num_node_per_epoch,
-                              epoch)
-            self.writer.add_scalar('{}_LOSS_DIM'.format(self.STATE), loss_dim_per_epoch / num_node_per_epoch,
-                              epoch)
-
-        ''' save model '''
-        if (not is_training):
+                    msg = (f"{self.STATE} {opt_parser.name} Epoch {epoch}: "
+                        f"Room {opt_parser.batch_size * batch_i + room_i}, Query {query_node} "
+                        f"({len(query_gt_labels)} pairs) Loss: {loss.item():.4f}")
+                    tqdm.write(msg)
+            # if room_pairs > 0:
+            #     avg_room_loss = room_loss / room_pairs
+            #     tqdm.write(f"Room {opt_parser.batch_size * batch_i + room_i} Avg Loss: {avg_room_loss:.4f}")
+        avg_loss = total_loss / total_examples if total_examples > 0 else 0
+        tqdm.write("=" * 55)
+        tqdm.write(f"{self.STATE} {epoch}: Avg Relationship Loss: {avg_loss:.4f}")
+        tqdm.write("=" * 55)
+        # Optionally save the model when evaluating.
+        if not is_training:
             def save_model(save_type):
                 torch.save({
                     'full_enc_state_dict': self.full_enc.state_dict(),
@@ -456,22 +237,11 @@ class train_model():
                     'full_enc_opt': self.opt['full_enc'].state_dict(),
                     'full_dec_opt': self.opt['full_dec'].state_dict(),
                     'epoch': epoch
-                }, '{}/Entire_model_{}.pth'.format(opt_parser.outf, save_type))
+                }, f"{opt_parser.outf}/Entire_model_{save_type}.pth")
 
-            # if model is better, save model checkpoint
-            # min dim loss model
-            if(loss_dim_per_epoch / num_node_per_epoch < self.MIN_DIM_LOSS):
-                self.MIN_DIM_LOSS = loss_dim_per_epoch / num_node_per_epoch
-                save_model('min_dim_loss')
-            # max cat acc model (top-5 acc)
-            if (acc_cat_per_epoch[5] / num_node_per_epoch > self.MAX_ACC):
-                self.MAX_ACC = acc_cat_per_epoch[5] / num_node_per_epoch
-                save_model('max_acc')
-            # min cat loss model
-            if (loss_cat_per_epoch / num_node_per_epoch < self.MIN_LOSS):
-                self.MIN_LOSS = loss_cat_per_epoch / num_node_per_epoch
+            if avg_loss < self.MIN_LOSS:
+                self.MIN_LOSS = avg_loss
                 save_model('min_loss')
-            # always save the latest model
             save_model('last_epoch')
 
         return
