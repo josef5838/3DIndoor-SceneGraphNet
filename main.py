@@ -33,7 +33,7 @@ parser.add_argument('--load_model_along_with_optimizer', default=False, action='
 
 # others
 parser.add_argument('--verbose', default=0, type=int, help='')
-parser.add_argument('--name', default='my-train-model')
+parser.add_argument('--name', default='addition')
 
 parser.add_argument('--mode', default='train', help='train or test')
 
