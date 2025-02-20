@@ -35,7 +35,10 @@ def get_gt_k_vec(node_list, cur_node, opt_parser):
     cat_vec = [0.0] * (len(opt_parser.cat2id.keys()) + 1)
     cat_vec[int(opt_parser.cat2id[cat])] = 1.0
 
-    return cat_vec 
+    node_instance_id = float(cur_node.split('_')[-1]) 
+
+
+    return cat_vec + node_instance_id
 
 class AggregateGRUEnc(nn.Module):
     def __init__(self, k=54, d=100, h=300):
@@ -89,7 +92,7 @@ class UpdateEnc(nn.Module):
 
 
 class BoxEnc(nn.Module):
-    def __init__(self, k=54, d=100, h=300):
+    def __init__(self, k=55, d=100, h=300):
         super(BoxEnc, self).__init__()
 
         self.enc = nn.Sequential(

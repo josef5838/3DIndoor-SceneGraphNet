@@ -33,7 +33,7 @@ parser.add_argument('--load_model_along_with_optimizer', default=False, action='
 
 # others
 parser.add_argument('--verbose', default=0, type=int, help='')
-parser.add_argument('--name', default='addition')
+parser.add_argument('--name', default='manipulation')
 
 parser.add_argument('--mode', default='train', help='train or test')
 
@@ -72,7 +72,7 @@ if(opt_parser.load_model_name != ''):
     # ckpt_names = [ckpt_name for ckpt_name in ckpt_names if 'epoch' in ckpt_name]
     # ckpt_names = sorted(ckpt_names, key=lambda x: int(x.split('_')[-1].split('.')[0]))  
     # opt_parser.ckpt = os.path.join(ckpt_dir, opt_parser.load_model_name, ckpt_names[-1])
-    opt_parser.ckpt = os.path.join(ckpt_dir, opt_parser.load_model_name, "min_loss.pth")
+    opt_parser.ckpt = os.path.join(ckpt_dir, opt_parser.name, "min_loss.pth")
 else:
     opt_parser.ckpt = ''
 

@@ -121,6 +121,29 @@ class inference_model():
                 
                 original_node_list = room['node_list']
 
+                opp_rels = {
+                    "higher_than": "lower_than",
+                    "lower_than": "higher_than",
+                    "left": "right",
+                    "right": "left",
+                    "front": "behind",
+                    "behind": "front",
+                    "bigger_than": "smaller_than",
+                    "smaller_than": "bigger_than",
+                    "same_as": "same_as"
+                }
+                for rel in opp_rels:
+                    if rel in self.rels and opp_rels[rel] in self.rels:
+                        for node_name, node_info in original_node_list.items():
+                            if isinstance(node_info, dict):
+                                if rel in node_info:
+                                    for i, val in enumerate(node_info[rel]):
+                                        if val in original_node_list:
+                                            if opp_rels[rel] not in node_info:
+                                                node_info[opp_rels[rel]] = []
+                                            if node_name not in original_node_list[val][opp_rels[rel]]:
+                                                original_node_list[val][opp_rels[rel]].append(node_name)
+
                 # Process each node as a query node.
                 for query_node in list(original_node_list.keys()):
                     # Deep copy the node list for a reduced graph.
@@ -212,7 +235,7 @@ class inference_model():
                     # save to txt
                     with open(os.path.join(opt_parser.outf, 'outputs_{}.txt'.format(epoch)), 'a') as f:
                         for output in outputs:
-                            f.write(f"{output[0]} {output[1]} {output[2]} {output[3]}\n")
+                            f.write(f"{output[0]}\t{output[1]}\t{output[2]}\t{output[3]}\n")
 
 
                     # Create ground-truth tensor.

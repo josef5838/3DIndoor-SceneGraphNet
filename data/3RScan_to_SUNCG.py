@@ -15,13 +15,21 @@ def convert_dataset(input_data, rel_types):
         node_list = {}
         objects = scan.get("objects", {})
         all_obj_id = set()
-            
+        # compute the instance id for each object
+        name_count = {}
+        for obj_id, obj_name in objects.items():
+            # Increment the count for this object name.
+            obj_name = obj_name.replace(' ', '_')
+            count = name_count.get(obj_name, 0) + 1
+            name_count[obj_name] = count
+            # Append the count to the name
+            objects[obj_id] = f"{obj_name}_{count}"
         for obj_id, obj_name in objects.items():
             # Replace spaces with underscores in the object name to form the key
-            key = f"{obj_name.replace(' ', '_')}_{obj_id}"
+            key = f"{obj_name}"
                 
             node_list[key] = {
-                "type": obj_name.replace(' ', '_'),
+                "type": obj_name,
                 "self_info": {
                     # Default identity rotation (3x3 flattened), zero translation and dimensions
                     # "rotation": [1.0, 0.0, 0.0,
@@ -54,8 +62,8 @@ def convert_dataset(input_data, rel_types):
                 continue
             # Only proceed if both source and target exist in the objects dictionary
             if source_id in objects and target_id in objects:
-                source_key = f"{objects[source_id].replace(' ', '_')}_{source_id}"
-                target_key = f"{objects[target_id].replace(' ', '_')}_{target_id}"
+                source_key = f"{objects[source_id].replace(' ', '_')}"
+                target_key = f"{objects[target_id].replace(' ', '_')}"
                 # Check if the relationship type exists in the source node
                 if rel_type in node_list[source_key]:
                     if target_key not in node_list[source_key][rel_type]:
@@ -68,7 +76,7 @@ def convert_dataset(input_data, rel_types):
                 """
         for obj_id, obj_name in objects.items():
             if obj_id not in all_obj_id:
-                node_list.pop(f"{obj_name.replace(' ', '_')}_{obj_id}")
+                node_list.pop(f"{obj_name.replace(' ', '_')}")
 
         # Build the final room dictionary for this scan
         room = {
@@ -85,7 +93,7 @@ def convert_dataset(input_data, rel_types):
 def main():
     # Read the original JSON dataset from "input.json"
 
-    with open("/cluster/project/cvg/students/shangwu/graphto3d_mani/GT/relationships_validation_filtered.json", "r") as infile:
+    with open("/cluster/project/cvg/students/shangwu/graphto3d_mani/GT/relationships_train_filtered.json", "r") as infile:
         input_data = json.load(infile)
     
     rels = []
@@ -104,7 +112,7 @@ def main():
     converted_data = convert_dataset(input_data, rels)
 
     # Write the converted data to "output.json"
-    with open("/cluster/project/cvg/students/shangwu/3DIndoor-SceneGraphNet/data/3RScan_val.json", "w") as outfile:
+    with open("/cluster/project/cvg/students/shangwu/3DIndoor-SceneGraphNet/data/3RScan_data.json", "w") as outfile:
         json.dump(converted_data, outfile, indent=2)
 
 if __name__ == "__main__":
