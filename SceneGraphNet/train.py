@@ -76,7 +76,7 @@ class train_model():
         self.LOSS_CLS = torch.nn.CrossEntropyLoss()
 
         ''' load valid rooms '''
-        with open(os.path.join(pkl_dir, '{}_data.json'.format(opt_parser.room_type))) as f:
+        with open(os.path.join(pkl_dir, '{}_train.json'.format(opt_parser.room_type))) as f:
             self.valid_rooms = json.load(f)
         self.valid_rooms_train = self.valid_rooms[0:opt_parser.num_train_rooms]
         self.valid_rooms_test = self.valid_rooms[opt_parser.num_train_rooms:opt_parser.num_train_rooms + opt_parser.num_test_rooms]
@@ -86,7 +86,7 @@ class train_model():
 
 
    
-    def _training_pass(self, valid_rooms, epoch, is_training=True):
+    def _training_pass(self, valid_rooms, epoch, is_training=True, type='add'):
         """
         Single training pass
         :param valid_rooms: choice of =[self.valid_rooms_train, self.valid_rooms_test]
@@ -118,152 +118,294 @@ class train_model():
         room_idx_batches = [room_indices[i: i + opt_parser.batch_size] for i in
                             range(0, len(valid_rooms), opt_parser.batch_size)]
         
-        ''' Batch loop '''
-        for batch_i, batch in enumerate(tqdm(room_idx_batches, desc="Batches", disable=disable_progress)):
+        if type == 'add':
+            ''' Batch loop '''
+            for batch_i, batch in enumerate(tqdm(room_idx_batches, desc="Batches", disable=disable_progress)):
 
-            batch_rooms = [valid_rooms[i] for i in batch]
+                batch_rooms = [valid_rooms[i] for i in batch]
 
-            """ ==================================================================
-                                        Encoder Part
-            ================================================================== """
+                """ ==================================================================
+                                            Encoder Part
+                ================================================================== """
 
-            # loop for rooms
-            for room_i, room in enumerate(tqdm(batch_rooms, desc="Rooms", leave=False, disable=disable_progress)):
-                room_loss = 0.0
-                room_pairs = 0
-                
-                original_node_list = room['node_list']
-                
-                # augment the dataset such that for relationships that have opposite relationships, set the opposite relationship for the flipped pair
-                opp_rels = {
-                    "higher_than": "lower_than",
-                    "lower_than": "higher_than",
-                    "left": "right",
-                    "right": "left",
-                    "front": "behind",
-                    "behind": "front",
-                    "bigger_than": "smaller_than",
-                    "smaller_than": "bigger_than",
-                    "same_as": "same_as"
-                }
-                for rel in opp_rels:
-                    if rel in self.rels and opp_rels[rel] in self.rels:
-                        for node_name, node_info in original_node_list.items():
-                            if isinstance(node_info, dict):
+                # loop for rooms
+                for room_i, room in enumerate(tqdm(batch_rooms, desc="Rooms", leave=False, disable=disable_progress)):
+                    room_loss = 0.0
+                    room_pairs = 0
+                    
+                    original_node_list = room['node_list']
+                    
+                    # augment the dataset such that for relationships that have opposite relationships, set the opposite relationship for the flipped pair
+                    opp_rels = {
+                        "higher_than": "lower_than",
+                        "lower_than": "higher_than",
+                        "left": "right",
+                        "right": "left",
+                        "front": "behind",
+                        "behind": "front",
+                        "bigger_than": "smaller_than",
+                        "smaller_than": "bigger_than",
+                        "same_as": "same_as"
+                    }
+                    for rel in opp_rels:
+                        if rel in self.rels and opp_rels[rel] in self.rels:
+                            for node_name, node_info in original_node_list.items():
+                                if isinstance(node_info, dict):
+                                    if rel in node_info:
+                                        for i, val in enumerate(node_info[rel]):
+                                            if val in original_node_list:
+                                                if opp_rels[rel] not in node_info:
+                                                    node_info[opp_rels[rel]] = []
+                                                if node_name not in original_node_list[val][opp_rels[rel]]:
+                                                    original_node_list[val][opp_rels[rel]].append(node_name)
+                    # import pdb; pdb.set_trace()
+                                                        
+
+                    # Process each node as a query node.
+                    for query_node in list(original_node_list.keys()):
+                        # Deep copy the node list for a reduced graph.
+                        reduced_node_list = copy.deepcopy(original_node_list)
+                        # Remove the query node.
+                        reduced_node_list.pop(query_node, None)
+
+                        # Additionally, remove any references to the query node from all relationship lists.
+                        # Here, we assume that the relationship keys are provided in self.rels.
+                        for node_name, node_info in reduced_node_list.items():
+                            for rel in self.rels:
                                 if rel in node_info:
-                                    for i, val in enumerate(node_info[rel]):
-                                        if val in original_node_list:
-                                            if opp_rels[rel] not in node_info:
-                                                node_info[opp_rels[rel]] = []
-                                            if node_name not in original_node_list[val][opp_rels[rel]]:
-                                                original_node_list[val][opp_rels[rel]].append(node_name)
-                # import pdb; pdb.set_trace()
-                                                    
+                                    # Assume the relationship value is a list of node names.
+                                    if isinstance(node_info[rel], list):
+                                        node_info[rel] = [n for n in node_info[rel] if n != query_node]
+                                    # If it's a single value instead, clear it if it matches.
+                                    elif node_info[rel] == query_node:
+                                        node_info[rel] = None
+                        
+                        enc_fold = torchfold.Fold()
+                        # Build the fold operations and get the list of node handles
+                        encoded_nodes = self.model.encode_graph_fold(enc_fold, reduced_node_list, opt_parser)
+                        # Use the returned list of handles when applying the fold
+                        # Wrap each node handle in a list so that each is iterable.
+                        node_handles = [[node] for node in encoded_nodes.values()]
+                        enc_fold_nodes = enc_fold.apply(self.full_enc, node_handles)
 
-                # Process each node as a query node.
-                for query_node in list(original_node_list.keys()):
-                    # Deep copy the node list for a reduced graph.
-                    reduced_node_list = copy.deepcopy(original_node_list)
+                        # Create a mapping to decouple the node names from the encoded nodes.
+                        node_names = list(encoded_nodes.keys())
+                        enc_mapping = {}
+                        for i, name in enumerate(node_names):
+                            # Assuming enc_fold_results is a list or can be indexed accordingly.
+                            enc_mapping[name] = enc_fold_nodes[i]
 
-                    # Additionally, remove any references to the query node from all relationship lists.
-                    # Here, we assume that the relationship keys are provided in self.rels.
-                    for node_name, node_info in reduced_node_list.items():
-                        for rel in self.rels:
-                            if rel in node_info:
-                                # Assume the relationship value is a list of node names.
-                                if isinstance(node_info[rel], list):
-                                    node_info[rel] = [n for n in node_info[rel] if n != query_node]
-                                # If it's a single value instead, clear it if it matches.
-                                elif node_info[rel] == query_node:
-                                    node_info[rel] = None
+                        dec_fold = torchfold.Fold()
+                        dec_fold_nodes = []
+                        # For the query node, compute its representation solely from its category label.
+                        query_k_vec = self.model.get_gt_k_vec(original_node_list, query_node, opt_parser)
+                        query_k_vec = to_torch(query_k_vec)  # Convert to tensor.
+                        query_d_vec = self.full_enc.box_enc_func(query_k_vec)
 
-                    for rel in self.rels:
-                        if rel == "None":
+                        
+                        # For every remaining node in the reduced graph, add a decoder op.
+                        query_gt_labels = []
+                        for known_node in node_names:
+                            # Look up the ground-truth relationship from the original room.
+                            gt_rel = next((rel for rel, values in original_node_list[query_node].items() 
+                                        if isinstance(values, list) and known_node in values), "None")
+                            if gt_rel == "None" and random.random() < 0.9:
+                                continue
+                            node_handle = dec_fold.add('full_dec', query_d_vec, enc_mapping[known_node])
+                            dec_fold_nodes.append(node_handle)
+                            
+                            
+                            gt = opt_parser.rel2id[gt_rel]
+                            query_gt_labels.append(gt)
+                        # compute loss weights as the inverse of the number of examples for each class
+                        # loss_weights = torch.tensor([1.0 / len([x for x in query_gt_labels if x == i]) for i in range(len(opt_parser.rel2id))])
+                        # loss_weights = loss_weights / loss_weights.sum()
+                        # loss_weights = loss_weights.to(device)
+
+                        # If no (query, known) pairs were found, skip this query.
+                        if len(query_gt_labels) == 0:
                             continue
-                        # remove all other relationship exept the one we are interested in
-                        rel_node_list = reduced_node_list[query_node][rel]
-                        if isinstance(rel_node_list, list):
-                            for target_node in rel_node_list:
-                                # first recover the original target node list
-                                reduced_node_list[query_node][rel] = original_node_list[query_node][rel]
-                                if target_node in original_node_list:
-                                    reduced_node_list[query_node][rel] = [target_node]
-                                    # This rel is the only one that should be present in the reduced graph.
-                                    # --- Message Passing for this specific edge begins here ---
-                                    enc_fold = torchfold.Fold()
-                                    # Build the fold operations and get the list of node handles
-                                    encoded_nodes = self.model.encode_graph_fold(enc_fold, reduced_node_list, opt_parser)
-                                    # Use the returned list of handles when applying the fold
-                                    # Wrap each node handle in a list so that each is iterable.
-                                    node_handles = [[node] for node in encoded_nodes.values()]
-                                    enc_fold_nodes = enc_fold.apply(self.full_enc, node_handles)
 
-                                    # Create a mapping to decouple the node names from the encoded nodes.
-                                    node_names = list(encoded_nodes.keys())
-                                    enc_mapping = {}
-                                    for i, name in enumerate(node_names):
-                                        # Assuming enc_fold_results is a list or can be indexed accordingly.
-                                        enc_mapping[name] = enc_fold_nodes[i]
+                        # Execute the fold to obtain relationship logits.
+                        dec_fold_nodes_wrapped = [[node] for node in dec_fold_nodes]
 
-                                    dec_fold = torchfold.Fold()
-                                    dec_fold_nodes = []
-                                    # Get the query node's encoded vector.
-                                    query_d_vec = enc_mapping[query_node]
+                        # Now, call apply with the wrapped nodes.
+                        fold_out = dec_fold.apply(self.full_dec, dec_fold_nodes_wrapped)
 
-                                    # For every remaining node in the reduced graph, add a decoder op.
-                                    query_gt_labels = []
-                                    for known_node in node_names:
-                                        if known_node == query_node or known_node == target_node:
-                                            continue
-                                        # target node uses gt relationship
-                                        # Look up the ground-truth relationship from the original room.
-                                        gt_rel = next((rel for rel, values in original_node_list[query_node].items() 
-                                                    if isinstance(values, list) and known_node in values), "None")
-                                        if gt_rel == "None" and random.random() < 0.9:
-                                            continue
-                                        node_handle = dec_fold.add('full_dec', query_d_vec, enc_mapping[known_node])
-                                        dec_fold_nodes.append(node_handle)
-                                        gt = opt_parser.rel2id[gt_rel]
-                                        query_gt_labels.append(gt)
-
-                                    # If no (query, known) pairs were found, skip this query.
-                                    if len(query_gt_labels) == 0:
-                                        continue
-
-                                    # Execute the fold to obtain relationship logits.
-                                    dec_fold_nodes_wrapped = [[node] for node in dec_fold_nodes]
-
-                                    # Now, call apply with the wrapped nodes.
-                                    fold_out = dec_fold.apply(self.full_dec, dec_fold_nodes_wrapped)
-
-                                    logits = torch.cat(fold_out, dim=0)
+                        logits = torch.cat(fold_out, dim=0)
 
 
-                                    # Create ground-truth tensor.
-                                    gt_tensor = to_torch(query_gt_labels, torch_type=torch.LongTensor, dim_0=len(query_gt_labels)).view(-1)
-                                    # import pdb; pdb.set_trace()
-                                    loss = self.LOSS_CLS(logits, gt_tensor)
+                        # Create ground-truth tensor.
+                        gt_tensor = to_torch(query_gt_labels, torch_type=torch.LongTensor, dim_0=len(query_gt_labels)).view(-1)
+                        # import pdb; pdb.set_trace()
+                        loss = self.LOSS_CLS(logits, gt_tensor)
 
-                                    room_loss += loss.item() * len(query_gt_labels)
-                                    room_pairs += len(query_gt_labels)
+                        room_loss += loss.item() * len(query_gt_labels)
+                        room_pairs += len(query_gt_labels)
 
-                                    total_loss += loss.item() * len(query_gt_labels)
-                                    total_examples += len(query_gt_labels)
+                        total_loss += loss.item() * len(query_gt_labels)
+                        total_examples += len(query_gt_labels)
 
-                                    if is_training:
-                                        for key in self.opt:
-                                            self.opt[key].zero_grad()
-                                        loss.backward()
-                                        for key in self.opt:
-                                            self.opt[key].step()
+                        if is_training:
+                            for key in self.opt:
+                                self.opt[key].zero_grad()
+                            loss.backward()
+                            for key in self.opt:
+                                self.opt[key].step()
 
-                                    msg = (f"{self.STATE} {opt_parser.name} Epoch {epoch}: "
-                                        f"Room {opt_parser.batch_size * batch_i + room_i}, Query {query_node} "
-                                        f"({len(query_gt_labels)} pairs) Loss: {loss.item():.4f}")
-                                    tqdm.write(msg)
+                        msg = (f"{self.STATE} {opt_parser.name} Epoch {epoch}: "
+                            f"Room {opt_parser.batch_size * batch_i + room_i}, Query {query_node} "
+                            f"({len(query_gt_labels)} pairs) Loss: {loss.item():.4f}")
+                        tqdm.write(msg)
             # if room_pairs > 0:
             #     avg_room_loss = room_loss / room_pairs
             #     tqdm.write(f"Room {opt_parser.batch_size * batch_i + room_i} Avg Loss: {avg_room_loss:.4f}")
+        elif type == 'mani':
+            ''' Batch loop '''
+            for batch_i, batch in enumerate(tqdm(room_idx_batches, desc="Batches", disable=disable_progress)):
+
+                batch_rooms = [valid_rooms[i] for i in batch]
+
+                """ ==================================================================
+                                            Encoder Part
+                ================================================================== """
+
+                # loop for rooms
+                for room_i, room in enumerate(tqdm(batch_rooms, desc="Rooms", leave=False, disable=disable_progress)):
+                    room_loss = 0.0
+                    room_pairs = 0
+                    
+                    original_node_list = room['node_list']
+                    
+                    # augment the dataset such that for relationships that have opposite relationships, set the opposite relationship for the flipped pair
+                    opp_rels = {
+                        "higher_than": "lower_than",
+                        "lower_than": "higher_than",
+                        "left": "right",
+                        "right": "left",
+                        "front": "behind",
+                        "behind": "front",
+                        "bigger_than": "smaller_than",
+                        "smaller_than": "bigger_than",
+                        "same_as": "same_as"
+                    }
+                    for rel in opp_rels:
+                        if rel in self.rels and opp_rels[rel] in self.rels:
+                            for node_name, node_info in original_node_list.items():
+                                if isinstance(node_info, dict):
+                                    if rel in node_info:
+                                        for i, val in enumerate(node_info[rel]):
+                                            if val in original_node_list:
+                                                if opp_rels[rel] not in node_info:
+                                                    node_info[opp_rels[rel]] = []
+                                                if node_name not in original_node_list[val][opp_rels[rel]]:
+                                                    original_node_list[val][opp_rels[rel]].append(node_name)
+                    # import pdb; pdb.set_trace()
+                                                        
+
+                    # Process each node as a query node.
+                    for query_node in list(original_node_list.keys()):
+                        # Deep copy the node list for a reduced graph.
+                        reduced_node_list = copy.deepcopy(original_node_list)
+
+                        # Additionally, remove any references to the query node from all relationship lists.
+                        # Here, we assume that the relationship keys are provided in self.rels.
+                        for node_name, node_info in reduced_node_list.items():
+                            for rel in self.rels:
+                                if rel in node_info:
+                                    # Assume the relationship value is a list of node names.
+                                    if isinstance(node_info[rel], list):
+                                        node_info[rel] = [n for n in node_info[rel] if n != query_node]
+                                    # If it's a single value instead, clear it if it matches.
+                                    elif node_info[rel] == query_node:
+                                        node_info[rel] = None
+
+                        for rel in self.rels:
+                            if rel == "None":
+                                continue
+                            # remove all other relationship exept the one we are interested in
+                            rel_node_list = reduced_node_list[query_node][rel]
+                            if isinstance(rel_node_list, list):
+                                for target_node in rel_node_list:
+                                    # first recover the original target node list
+                                    reduced_node_list[query_node][rel] = original_node_list[query_node][rel]
+                                    if target_node in original_node_list:
+                                        reduced_node_list[query_node][rel] = [target_node]
+                                        # This rel is the only one that should be present in the reduced graph.
+                                        # --- Message Passing for this specific edge begins here ---
+                                        enc_fold = torchfold.Fold()
+                                        # Build the fold operations and get the list of node handles
+                                        encoded_nodes = self.model.encode_graph_fold(enc_fold, reduced_node_list, opt_parser)
+                                        # Use the returned list of handles when applying the fold
+                                        # Wrap each node handle in a list so that each is iterable.
+                                        node_handles = [[node] for node in encoded_nodes.values()]
+                                        enc_fold_nodes = enc_fold.apply(self.full_enc, node_handles)
+
+                                        # Create a mapping to decouple the node names from the encoded nodes.
+                                        node_names = list(encoded_nodes.keys())
+                                        enc_mapping = {}
+                                        for i, name in enumerate(node_names):
+                                            # Assuming enc_fold_results is a list or can be indexed accordingly.
+                                            enc_mapping[name] = enc_fold_nodes[i]
+
+                                        dec_fold = torchfold.Fold()
+                                        dec_fold_nodes = []
+                                        # Get the query node's encoded vector.
+                                        query_d_vec = enc_mapping[query_node]
+
+                                        # For every remaining node in the reduced graph, add a decoder op.
+                                        query_gt_labels = []
+                                        for known_node in node_names:
+                                            if known_node == query_node or known_node == target_node:
+                                                continue
+                                            # target node uses gt relationship
+                                            # Look up the ground-truth relationship from the original room.
+                                            gt_rel = next((rel for rel, values in original_node_list[query_node].items() 
+                                                        if isinstance(values, list) and known_node in values), "None")
+                                            if gt_rel == "None" and random.random() < 0.9:
+                                                continue
+                                            node_handle = dec_fold.add('full_dec', query_d_vec, enc_mapping[known_node])
+                                            dec_fold_nodes.append(node_handle)
+                                            gt = opt_parser.rel2id[gt_rel]
+                                            query_gt_labels.append(gt)
+
+                                        # If no (query, known) pairs were found, skip this query.
+                                        if len(query_gt_labels) == 0:
+                                            continue
+
+                                        # Execute the fold to obtain relationship logits.
+                                        dec_fold_nodes_wrapped = [[node] for node in dec_fold_nodes]
+
+                                        # Now, call apply with the wrapped nodes.
+                                        fold_out = dec_fold.apply(self.full_dec, dec_fold_nodes_wrapped)
+
+                                        logits = torch.cat(fold_out, dim=0)
+
+
+                                        # Create ground-truth tensor.
+                                        gt_tensor = to_torch(query_gt_labels, torch_type=torch.LongTensor, dim_0=len(query_gt_labels)).view(-1)
+                                        # import pdb; pdb.set_trace()
+                                        loss = self.LOSS_CLS(logits, gt_tensor)
+
+                                        room_loss += loss.item() * len(query_gt_labels)
+                                        room_pairs += len(query_gt_labels)
+
+                                        total_loss += loss.item() * len(query_gt_labels)
+                                        total_examples += len(query_gt_labels)
+
+                                        if is_training:
+                                            for key in self.opt:
+                                                self.opt[key].zero_grad()
+                                            loss.backward()
+                                            for key in self.opt:
+                                                self.opt[key].step()
+
+                                        msg = (f"{self.STATE} {opt_parser.name} Epoch {epoch}: "
+                                            f"Room {opt_parser.batch_size * batch_i + room_i}, Query {query_node} "
+                                            f"({len(query_gt_labels)} pairs) Loss: {loss.item():.4f}")
+                                        tqdm.write(msg)
+        else:
+            raise ValueError(f"Invalid type: {type}, please train for task add or mani")
         avg_loss = total_loss / total_examples if total_examples > 0 else 0
         tqdm.write("=" * 55)
         tqdm.write(f"{self.STATE} {epoch}: Avg Relationship Loss: {avg_loss:.4f}")
@@ -289,12 +431,12 @@ class train_model():
 
     def train(self, epoch):
         st = time.time()
-        self._training_pass(self.valid_rooms_train, epoch, is_training=True)
+        self._training_pass(self.valid_rooms_train, epoch, is_training=True, type=self.opt_parser.task)
         print('time usage:', time.time() - st)
 
     def test(self, epoch, DEBUG_mode=False):
         with torch.no_grad():
-            self._training_pass(self.valid_rooms_test, epoch, is_training=False)
+            self._training_pass(self.valid_rooms_test, epoch, is_training=False, type=self.opt_parser.task)
 
 
 

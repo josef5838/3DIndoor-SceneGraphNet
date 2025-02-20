@@ -71,7 +71,7 @@ class inference_model():
         self.LOSS_CLS = torch.nn.CrossEntropyLoss()
 
         ''' load valid rooms '''
-        with open(os.path.join(pkl_dir, '{}_data.json'.format(opt_parser.room_type))) as f:
+        with open(os.path.join(pkl_dir, '{}_validation.json'.format(opt_parser.room_type))) as f:
             self.valid_rooms = json.load(f)
         
         self.valid_rooms_test = self.valid_rooms[11:12] # first a room for testing
