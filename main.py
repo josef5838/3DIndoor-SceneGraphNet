@@ -33,10 +33,10 @@ parser.add_argument('--load_model_along_with_optimizer', default=False, action='
 
 # others
 parser.add_argument('--verbose', default=0, type=int, help='')
-parser.add_argument('--name', default='manipulation')
+# parser.add_argument('--name', default='manipulation')
 
 parser.add_argument('--mode', default='train', help='train or test')
-parser.add_argument('--task', default='add', help='add or mani')
+parser.add_argument('--task', default='add', type=str, help='add or mani')
 
 parser.add_argument('--continue_training', default=False, action='store_true')
 
@@ -44,6 +44,12 @@ parser.add_argument('--continue_training', default=False, action='store_true')
 opt_parser = parser.parse_args()
 opt_parser.write = not opt_parser.test
 
+if opt_parser.task == 'add':
+    opt_parser.name = 'addition'
+elif opt_parser.task == 'mani':
+    opt_parser.name = 'manipulation'
+else:
+    opt_parser.name = 'dummy'
 
 id2cat_file_path = os.path.join(root_dir, 'data/preprocess/TRAIN_id2cat_{}.json'.format(opt_parser.room_type))
 with open(id2cat_file_path) as id2cat_file:
@@ -90,5 +96,5 @@ if(opt_parser.mode == "train"):
     else:
         M.test(0)
 else:
-    M = inference_model(opt_parser)
+    M = inference_model(opt_parser=opt_parser)
     M.inference(0)

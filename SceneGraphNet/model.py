@@ -70,7 +70,7 @@ class AggregateGRUEnc(nn.Module):
 
 
 class UpdateEnc(nn.Module):
-    def __init__(self, k=54, d=100, h=300, r=20):
+    def __init__(self, k=54, d=100, h=300, r=17):
         # r: relation types
         super(UpdateEnc, self).__init__()
 
@@ -120,7 +120,7 @@ class FullEnc(nn.Module):
         # 27 relationship types
         self.aggregate_cooc_enc = AggregateGRUEnc(k, d, h)
 
-        self.aggregate_self_enc = UpdateEnc(k, d, h)
+        self.aggregate_self_enc = UpdateEnc(k, d, h, r=len(rels)+1)
 
         self.box_enc = BoxEnc(k, d, h)
 
@@ -219,6 +219,39 @@ def encode_graph_fold(fold, raw_node_list, opt_parser):
 
                 node_list[cur_node]['d-vec'] = fold.add('aggregate_self_func',
                                                         node_list[cur_node]['pre-d-vec'],
+                                                        # left
+                                                        # right
+                                                        # front
+                                                        # behind
+                                                        # close by
+                                                        # above
+                                                        # standing on
+                                                        # bigger than
+                                                        # smaller than
+                                                        # taller than
+                                                        # shorter than
+                                                        # symmetrical to
+                                                        # same style as
+                                                        # same super category as
+                                                        # same material as
+                                                        # same color as                                           
+
+                                                        # aggregate_rel_d_vec['left'],
+                                                        # aggregate_rel_d_vec['right'],
+                                                        # aggregate_rel_d_vec['front'],
+                                                        # aggregate_rel_d_vec['behind'],
+                                                        # aggregate_rel_d_vec['close_by'],
+                                                        # aggregate_rel_d_vec['above'],
+                                                        # aggregate_rel_d_vec['standing_on'],
+                                                        # aggregate_rel_d_vec['bigger_than'],
+                                                        # aggregate_rel_d_vec['smaller_than'],
+                                                        # aggregate_rel_d_vec['taller_than'],
+                                                        # aggregate_rel_d_vec['shorter_than'],
+                                                        # aggregate_rel_d_vec['symmetrical_to'],
+                                                        # aggregate_rel_d_vec['same_style_as'],
+                                                        # aggregate_rel_d_vec['same_super_category_as'],
+                                                        # aggregate_rel_d_vec['same_material_as'],
+                                                        
                                                         aggregate_rel_d_vec['supported_by'],
                                                         aggregate_rel_d_vec['left'],
                                                         aggregate_rel_d_vec['right'],

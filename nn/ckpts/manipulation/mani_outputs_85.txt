@@ -1,0 +1,37 @@
+====== mani triplet table_1 bed_1 right ====== 
+table_1	floor_1	standing_on	standing_on
+====== mani triplet table_1 floor_1 standing_on ====== 
+table_1	bed_1	right	right
+====== mani triplet pillow_1 pillow_2 behind ====== 
+pillow_1	bed_1	lying_on	right
+====== mani triplet pillow_1 pillow_2 close_by ====== 
+pillow_1	bed_1	lying_on	right
+====== mani triplet pillow_1 pillow_2 lower_than ====== 
+pillow_1	bed_1	lying_on	right
+====== mani triplet pillow_1 bed_1 lying_on ====== 
+pillow_1	pillow_2	behind	right
+====== mani triplet commode_1 bed_1 right ====== 
+commode_1	floor_1	standing_on	standing_on
+====== mani triplet commode_1 bed_1 close_by ====== 
+commode_1	floor_1	standing_on	standing_on
+====== mani triplet commode_1 floor_1 standing_on ====== 
+commode_1	bed_1	right	right
+====== mani triplet pillow_2 pillow_1 front ====== 
+pillow_2	bed_1	lying_on	right
+====== mani triplet pillow_2 pillow_1 higher_than ====== 
+pillow_2	bed_1	lying_on	right
+====== mani triplet pillow_2 bed_1 lying_on ====== 
+pillow_2	pillow_1	front	left
+====== mani triplet bed_1 commode_1 left ====== 
+bed_1	floor_1	standing_on	standing_on
+bed_1	table_1	left	standing_on
+====== mani triplet bed_1 table_1 left ====== 
+bed_1	floor_1	standing_on	standing_on
+bed_1	commode_1	left	right
+====== mani triplet bed_1 floor_1 standing_on ====== 
+bed_1	table_1	left	standing_on
+bed_1	commode_1	left	right
+====== mani triplet blanket_1 pillow_2 close_by ====== 
+blanket_1	bed_1	lying_on	right
+====== mani triplet blanket_1 bed_1 lying_on ====== 
+blanket_1	pillow_2	close_by	None

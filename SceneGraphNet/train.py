@@ -86,7 +86,7 @@ class train_model():
 
 
    
-    def _training_pass(self, valid_rooms, epoch, is_training=True, type='add'):
+    def _training_pass(self, valid_rooms, epoch, is_training=True, task='add'):
         """
         Single training pass
         :param valid_rooms: choice of =[self.valid_rooms_train, self.valid_rooms_test]
@@ -118,7 +118,7 @@ class train_model():
         room_idx_batches = [room_indices[i: i + opt_parser.batch_size] for i in
                             range(0, len(valid_rooms), opt_parser.batch_size)]
         
-        if type == 'add':
+        if task == 'add':
             ''' Batch loop '''
             for batch_i, batch in enumerate(tqdm(room_idx_batches, desc="Batches", disable=disable_progress)):
 
@@ -260,7 +260,7 @@ class train_model():
             # if room_pairs > 0:
             #     avg_room_loss = room_loss / room_pairs
             #     tqdm.write(f"Room {opt_parser.batch_size * batch_i + room_i} Avg Loss: {avg_room_loss:.4f}")
-        elif type == 'mani':
+        elif task == 'mani':
             ''' Batch loop '''
             for batch_i, batch in enumerate(tqdm(room_idx_batches, desc="Batches", disable=disable_progress)):
 
@@ -326,6 +326,8 @@ class train_model():
                             # remove all other relationship exept the one we are interested in
                             rel_node_list = reduced_node_list[query_node][rel]
                             if isinstance(rel_node_list, list):
+                                if len(rel_node_list) == 0:
+                                    continue
                                 for target_node in rel_node_list:
                                     # first recover the original target node list
                                     reduced_node_list[query_node][rel] = original_node_list[query_node][rel]
@@ -431,12 +433,12 @@ class train_model():
 
     def train(self, epoch):
         st = time.time()
-        self._training_pass(self.valid_rooms_train, epoch, is_training=True, type=self.opt_parser.task)
+        self._training_pass(self.valid_rooms_train, epoch, is_training=True, task=self.opt_parser.task)
         print('time usage:', time.time() - st)
 
     def test(self, epoch, DEBUG_mode=False):
         with torch.no_grad():
-            self._training_pass(self.valid_rooms_test, epoch, is_training=False, type=self.opt_parser.task)
+            self._training_pass(self.valid_rooms_test, epoch, is_training=False, task=self.opt_parser.task)
 
 
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=SceneGraphNet
+#SBATCH --job-name=mani-SGN
 #SBATCH --output=job_%j.out
 #SBATCH --error=job_%j.err
 #SBATCH --mem-per-cpu=8G
@@ -16,4 +16,4 @@ source ~/miniconda3/etc/profile.d/conda.sh
 conda activate pytorch3d
 
 # Run the Python script
-python /cluster/project/cvg/students/shangwu/3DIndoor-SceneGraphNet/main.py
+python /cluster/project/cvg/students/shangwu/3DIndoor-SceneGraphNet/main.py --task mani
